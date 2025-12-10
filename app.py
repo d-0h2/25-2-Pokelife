@@ -12,6 +12,12 @@ import base64
 # 필요한 모든 유틸리티 함수 임포트
 from utils import nl_to_sql, DB_PATH, create_chart_base64, generate_final_report, get_pokemon_image_html_from_dexnum
 
+# 포켓몬 타입 리스트 (리포트 필터용)
+POKEMON_TYPES = [
+    "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock",
+    "Bug", "Ghost", "Steel", "Fire", "Water", "Grass", "Electric",
+    "Psychic", "Ice", "Dragon", "Dark", "Fairy"
+]
 
 # ------------------------------------------------
 # 0. 기본 유틸리티
@@ -47,6 +53,19 @@ if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = []
 if "first_greeting_done" not in st.session_state:
     st.session_state.first_greeting_done = False
+
+# ✅ UserPokemon 원본 스냅샷 저장 (처음 한 번만)
+if "original_userpokemon" not in st.session_state:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            st.session_state.original_userpokemon = pd.read_sql_query(
+                "SELECT * FROM UserPokemon", conn
+            )
+    except Exception as e:
+        # 테이블이 아직 없거나 에러가 나도 앱이 죽지 않도록
+        st.session_state.original_userpokemon = None
+        print("⚠️ UserPokemon 스냅샷 로드 실패:", e)
+
 
 
 def set_background(image_file: str, bottom_img: str):
@@ -119,7 +138,7 @@ def set_background(image_file: str, bottom_img: str):
                 -1px  1px 0 #FFFFFF,
                  1px  1px 0 #FFFFFF;
         }}
-        /* 🔥 H3: 사이드바 부제목 ('예시 질의')에도 윤곽선 적용 (1px 윤곽선) */
+        /* H3: 사이드바 부제목 */
         h3 {{
             font-size: 19px !important;
             color: black !important;
@@ -187,30 +206,27 @@ def set_background(image_file: str, bottom_img: str):
         /* -------------------------------------------
            4-1. 입력란 컨테이너 스타일링 (흰색 배경 및 둥근 모서리)
         ------------------------------------------- */
-        /* Streamlit Input 컴포넌트가 들어있는 가장 바깥쪽의 Flex 컨테이너 */
         [data-testid="stChatInput"] > div > div:nth-child(2) {{
-            /* 내부 요소(텍스트 영역 및 버튼)를 플렉스로 중앙 정렬 */
             display: flex !important;
             align-items: center !important;
             
             background-color: white !important;
             border-radius: 14px !important;
-            border: 1px solid #d9d9d9 !important; /* 기본 회색 윤곽선 */
-            padding: 4px 8px 4px 8px !important; /* 내부 패딩 */
-            min-height: 40px;
-            box-shadow: none !important; /* 기본 그림자 제거 */
+            border: 1px solid #d9d9d9 !important;
+            padding: 4px 8px 4px 8px !important;
+            min-height: 52px;  /* 🔼 입력 박스 전체 높이 살짝 키움 */
+            box-shadow: none !important;
         }}
 
         /* -------------------------------------------
            4-2. 입력란 좌측 아이콘 제거
         ------------------------------------------- */
-        /* stChatInput의 첫 번째 자식 div는 말풍선 아이콘을 포함하는 컨테이너입니다. */
         [data-testid="stChatInput"] > div > div:first-child {{
             display: none !important;
         }}
 
         /* -------------------------------------------
-           4-3. 실제 텍스트 입력 영역 (스크롤 아이콘 제거 및 두께 정렬)
+           4-3. 실제 텍스트 입력 영역
         ------------------------------------------- */
         [data-baseweb="textarea"],
         [data-baseweb="textarea"] textarea {{
@@ -219,40 +235,43 @@ def set_background(image_file: str, bottom_img: str):
             color: black !important;
             font-family: 'NeoDGM', 'Malgun Gothic', sans-serif !important;
             
-            /* 높이를 고정하고 스크롤바가 생기지 않도록 overflow 제어 */
-            min-height: 28px !important;
-            height: 28px !important;
-            max-height: 28px !important;
-            overflow-y: hidden !important; /* 스크롤 아이콘 제거 */
+            /* 🔼 입력 칸 높이 키우기 */
+            min-height: 45px !important;
+            height: 45px !important;
+            max-height: 110px !important;   /* 여러 줄일 때 스크롤 */
+            overflow-y: auto !important;
             
-            padding-top: 5px !important;
-            padding-bottom: 5px !important;
+            padding-top: 10px !important;
+            padding-bottom: 10px !important;
             padding-left: 0px !important;
             padding-right: 0px !important;
+
+            resize: none !important;
         }}
         
         /* -------------------------------------------
-           4-4. 보내기 버튼 영역 (뒤의 겹쳐진 흰색 무언가 제거 및 정렬)
+           4-4. 보내기 버튼 영역
         ------------------------------------------- */
-        /* 버튼 영역의 불필요한 배경/그림자/마진 제거 */
         [data-testid="stChatInput"] [data-testid="baseview-root"] > div > div:nth-child(2) > div:last-child {{
              background: transparent !important;
              box-shadow: none !important;
              margin-top: 0px !important;
              padding-bottom: 0px !important;
-             margin-left: 8px !important; /* 텍스트 입력 필드와 간격 */
+             margin-left: 8px !important; 
+
+             /* 🔼 아이콘을 정확히 중앙 정렬 */
+             display: flex !important;
+             align-items: center !important;
         }}
         
         /* -------------------------------------------
-           4-5. 포커스 시 빨간색 윤곽선 (정확히 일치)
+           4-5. 포커스 시 빨간색 윤곽선
         ------------------------------------------- */
-        /* 텍스트 입력란에 포커스가 갔을 때, 전체 입력란 컨테이너에 빨간색 윤곽선 적용 */
         [data-testid="stChatInput"] > div > div:nth-child(2):has([data-baseweb="textarea"]:focus) {{
-            border-color: #f63366 !important; /* 빨간색 */
+            border-color: #f63366 !important;
             border-width: 1px !important;
             border-style: solid !important;
             border-radius: 14px !important;
-            /* 포커스 그림자도 빨간색으로 오버라이드 */
             box-shadow: 0 0 0 0.1rem rgba(246, 51, 102, 0.25) !important;
         }}
 
@@ -260,7 +279,7 @@ def set_background(image_file: str, bottom_img: str):
            5) 최종 리포트 박스 스타일
            ================================*/
         .report-container {{
-            background-color: rgba(230, 245, 235, 0.95); /* 아주 연한 초록색 */
+            background-color: rgba(230, 245, 235, 0.95);
             border-radius: 18px;
             padding: 18px 22px;
             margin-top: 12px;
@@ -290,19 +309,16 @@ def set_background(image_file: str, bottom_img: str):
             margin-bottom: 4px;
         }}
 
-        /* 강조 텍스트 스타일 */
         .report-container strong {{
             font-weight: 700;
-            color: #146c43; /* 약간 짙은 초록색 */
+            color: #146c43;
         }}
 
-
-        
-        
         </style>
         """,
         unsafe_allow_html=True,
     )
+
 def normalize_report_markdown(md: str) -> str:
     """
     LLM이 종종 '##1. 요약'처럼 # 뒤 공백 없이 쓰는 걸
@@ -488,8 +504,53 @@ st.markdown(
 
 st.markdown("---")
 
+
 # ------------------------------------------------
-# 4. 사이드바 (리포트 버튼 추가)
+# 4. 유저에게 포켓몬 추가하는 함수 (사이드바 바깥에 정의)
+# ------------------------------------------------
+def add_pokemon_to_user(user_id: int, pokemon_name: str):
+    """특정 유저에게 새 포켓몬 한 마리를 추가하는 함수"""
+    pokemon_name = pokemon_name.strip()
+    if not pokemon_name:
+        return False, "포켓몬 이름을 입력해주게나."
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.cursor()
+
+        # 1) 다음 slot_no 계산
+        cur.execute(
+            "SELECT COALESCE(MAX(slot_no) + 1, 1) FROM UserPokemon WHERE user_id = ?",
+            (user_id,)
+        )
+        next_slot = cur.fetchone()[0]
+
+        # 2) pokemon 테이블에서 포켓몬 정보 조회
+        cur.execute(
+            "SELECT dexnum, name FROM pokemon WHERE name = ?",
+            (pokemon_name,)
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return False, f"❌ '{pokemon_name}' 는(은) 도감에 등록되어 있지 않네."
+
+        dexnum, name = row
+
+        # 3) UserPokemon에 INSERT
+        cur.execute(
+            """
+            INSERT INTO UserPokemon (user_id, pokemon_id, pokemon_name, slot_no)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, dexnum, name, next_slot)
+        )
+        conn.commit()
+
+    return True, f"✅ {name} 를(을) 새로운 포켓몬으로 등록했네!"
+
+
+# ------------------------------------------------
+# 5. 사이드바 (예시 질의 + 리포트 + 포켓몬 획득 + 리셋)
 # ------------------------------------------------
 with st.sidebar:
     st.header("오박사의 포켓몬 연구소 소개")
@@ -502,7 +563,7 @@ with st.sidebar:
     <hr style="border:1px solid rgba(255,255,255,0.4)">
     """, unsafe_allow_html=True)
 
-    # 🔹 예시 질의 버튼을 사이드바로 이동
+    # 🔹 예시 질의 섹션 (여기서 복구!)
     st.subheader("예시 질의")
 
     sidebar_example_questions = [
@@ -521,26 +582,111 @@ with st.sidebar:
     <hr style="border:1px solid rgba(255,255,255,0.4)">
     """, unsafe_allow_html=True)
     
-       # ✅ 최종 분석 리포트 생성 버튼
-    if st.button("📘 최종 분석 리포트 생성"):
-        with st.spinner("리포트를 작성 중이에요..."):
-            final_report_html = generate_final_report(
-                st.session_state.analysis_results
-            )
-            st.session_state.final_report_html = final_report_html
-            st.rerun()
+    # ✅ 리포트 필터 설정
+    st.subheader("리포트 필터")
 
-    # 👇 대화 초기화 시에도 final_report_html 삭제
-    if st.button("대화 초기화"):
+    gen_filter = st.selectbox(
+        "세대 필터",
+        ["전체", 1, 2, 3, 4, 5, 6, 7, 8],
+        index=0,
+        key="report_gen_filter",      # 고유 key
+    )
+
+    type_filter = st.multiselect(
+        "타입 필터 (type1/type2 기준)",
+        POKEMON_TYPES,
+        key="report_type_filter",     # 고유 key
+    )
+
+    if st.button("📘 필터 기준으로 최종 분석 리포트 생성", key="generate_report"):
+        if not st.session_state.analysis_results:
+            st.warning("먼저 여러 번 질의를 실행해서 분석 결과를 쌓아주세요!")
+        else:
+            with st.spinner("리포트를 작성 중이에요..."):
+                final_report_html = generate_final_report(
+                    st.session_state.analysis_results,
+                    gen_filter=None if gen_filter == "전체" else gen_filter,
+                    type_filter=type_filter,
+                )
+                st.session_state.final_report_html = final_report_html
+
+    st.markdown("""
+    <hr style="border:1px solid rgba(255,255,255,0.4)">
+    """, unsafe_allow_html=True)
+
+    # 🔥 포켓몬 획득 섹션
+    st.subheader("🎮 포켓몬 획득")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        user_df = pd.read_sql_query(
+            "SELECT User_id, Username FROM UserData", conn
+        )
+
+    if user_df.empty:
+        st.info("등록된 트레이너가 없네. UserData 테이블을 먼저 채워주게나.")
+    else:
+        user_name_list = user_df["Username"].tolist()
+        user_name_to_id = dict(zip(user_df["Username"], user_df["User_id"]))
+
+        selected_user = st.selectbox(
+            "포켓몬을 받을 트레이너",
+            user_name_list,
+            key="select_trainer"
+        )
+
+        new_mon = st.text_input(
+            "추가할 포켓몬 이름",
+            key="input_new_pokemon"
+        )
+
+        if st.button("포켓몬 추가", key="btn_add_pokemon"):
+            selected_user_id = user_name_to_id[selected_user]
+            ok, msg = add_pokemon_to_user(
+                user_id=selected_user_id,
+                pokemon_name=new_mon
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    st.markdown("""
+    <hr style="border:1px solid rgba(255,255,255,0.4)">
+    """, unsafe_allow_html=True)
+
+    # ✅ 대화 + 포켓몬 초기화 버튼 (UserPokemon까지 롤백)
+    if st.button("대화 및 포켓몬 초기화", key="btn_reset_all"):
+        # 1) 채팅/리포트 세션 상태 초기화
         st.session_state.messages = []
         st.session_state.analysis_results = []
+        st.session_state.first_greeting_done = False
         if "final_report_html" in st.session_state:
             del st.session_state.final_report_html
-        st.session_state.first_greeting_done = False
+
+        # 2)  UserPokemon 테이블을 원래 상태로 되돌리기
+        if st.session_state.get("original_userpokemon") is not None:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                # 기존 UserPokemon 모두 삭제
+                cur.execute("DELETE FROM UserPokemon")
+                conn.commit()
+
+                # 스냅샷에 있던 원본 데이터 다시 INSERT
+                st.session_state.original_userpokemon.to_sql(
+                    "UserPokemon",
+                    conn,
+                    if_exists="append",
+                    index=False,
+                )
+        else:
+            # 스냅샷이 없으면 그냥 경고만 출력 (DB는 건드리지 않음)
+            st.warning("초기 UserPokemon 스냅샷이 없어 포켓몬 데이터는 유지되었네.")
+
+        # 3) 화면 새로고침
         st.rerun()
 
-    
-    st.markdown("---")
+
+
 
 # ------------------------------------------------
 # 5. 채팅 로그 출력
@@ -585,7 +731,7 @@ if prompt:
         m for m in st.session_state.messages if m["role"] == "user"
     ])
 
-    # ✅ 3. 10번째 질문 이스터에그 (랜덤 멘트)
+    # ✅ 3. 5번째 질문 이스터에그 (랜덤 멘트)
     easter_egg = ""
     if user_question_count == 5:
         egg_messages = [

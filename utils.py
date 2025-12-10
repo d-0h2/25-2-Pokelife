@@ -26,22 +26,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "MyPocket.sqlite")
 
 # ------------------------------------------------
-# 1. Matplotlib 한글 폰트 설정 (기존 로직 유지)
+# 1. Matplotlib 한글 폰트 설정
 # ------------------------------------------------
-FONT_NAME = "NeoDGM"
 FONT_PATH = os.path.join(BASE_DIR, "font", "neodgm.ttf")
 
 if os.path.exists(FONT_PATH):
     try:
         fm.fontManager.addfont(FONT_PATH)
-        mpl.rcParams["font.family"] = FONT_NAME
-        print(f"✅ Matplotlib 폰트 적용 완료: {FONT_NAME}")
+        # ✅ 폰트 파일에서 실제 family name을 읽어오기
+        font_prop = fm.FontProperties(fname=FONT_PATH)
+        real_name = font_prop.get_name()
+        mpl.rcParams["font.family"] = real_name
+        print(f"✅ Matplotlib 폰트 적용 완료: {real_name}")
     except Exception as e:
         print(f"❌ 폰트 등록 실패: {e}")
 else:
     print(f"⚠️ 폰트 파일 없음: {FONT_PATH}")
 
 mpl.rcParams["axes.unicode_minus"] = False
+
 
 # ------------------------------------------------
 # 2. 스키마 설명
@@ -267,20 +270,67 @@ type2가 NULL이면 단일 타입 포켓몬입니다.
         return {"sql": None, "explanation_ko": f"LLM 오류: {e}"}
 
 # ------------------------------------------------
-# 5. 자동 차트 생성 (기존 로직 유지)
+# 5. 자동 차트 생성 (스탯 컬럼 우선 선택 버전)
 # ------------------------------------------------
-def create_chart_base64(df: pd.DataFrame, x_col: str, y_col: str, title: str) -> str:
+def create_chart_base64(
+    df: pd.DataFrame,
+    x_col: str | None,
+    y_col: str | None,
+    title: str
+) -> str:
     """Pandas DataFrame을 기반으로 차트를 생성하고 Base64 이미지 태그 반환"""
-    if df.empty or not pd.api.types.is_numeric_dtype(df[y_col]):
+
+    if df is None or df.empty:
         return ""
 
+    # 🔹 1) 컬럼 타입별로 분리
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    cat_cols = df.select_dtypes(exclude="number").columns.tolist()
+
+    if not numeric_cols or not cat_cols:
+        return ""
+
+    # 🔹 2) x축 보정: 없거나 이상하면 첫 번째 범주형 컬럼으로
+    if (not x_col) or (x_col not in df.columns):
+        x_col = cat_cols[0]
+
+    # 🔹 3) y축 보정: 스탯 컬럼(attack, hp, …)을 최우선으로 선택
+    priority_numeric = ["attack", "hp", "defense", "sp_atk", "sp_def", "speed", "total"]
+
+    # y_col이 없거나, 숫자 컬럼이 아니거나,
+    #   OR 스탯 컬럼이 있는데 y_col이 스탯 컬럼이 아닐 때 → 스탯으로 덮어쓰기
+    has_priority = any(col in numeric_cols for col in priority_numeric)
+    if (
+        (not y_col)
+        or (y_col not in numeric_cols)
+        or (has_priority and y_col not in priority_numeric)
+    ):
+        # 우선순위 리스트에서 처음으로 존재하는 컬럼 선택
+        for col in priority_numeric:
+            if col in numeric_cols:
+                y_col = col
+                break
+        else:
+            # 우선순위 스탯이 하나도 없으면, 그냥 첫 번째 숫자 컬럼 사용
+            y_col = numeric_cols[0]
+
+    # 그래도 y축이 이상하면 포기
+    if y_col is None or not pd.api.types.is_numeric_dtype(df[y_col]):
+        return ""
+
+    # 🔹 4) 폰트 설정 (기존 유지)
+    try:
+        from matplotlib import rcParams
+        rcParams["font.family"] = mpl.rcParams.get("font.family")
+    except Exception:
+        pass
+
+    # 🔹 5) 실제 그래프 그리기
     plt.figure(figsize=(10, 5))
-    
-    # 데이터 포인트가 많지 않으면 막대 그래프, 많으면 선 그래프 등을 고려할 수 있지만,
-    # 여기서는 범용적으로 막대 그래프를 유지
+
     if len(df) > 50:
         plt.plot(df[x_col], df[y_col], marker='o')
-        plt.xticks(rotation=45, ha='right', fontsize=8) # 폰트 크기 줄이고 정렬 변경
+        plt.xticks(rotation=45, ha='right', fontsize=8)
     else:
         plt.bar(df[x_col], df[y_col])
         plt.xticks(rotation=45, ha='right')
@@ -317,6 +367,7 @@ def get_pokemon_image_html_from_dexnum(dexnum: int, width: int = 200) -> str | N
 
     # 파일이 하나도 없으면
     return None
+
 
 # ------------------------------------------------
 # 6. ✅ 타입 상성 데이터 (전체 데이터로 확장)
@@ -430,11 +481,10 @@ def init_type_effectiveness():
     conn.close()
     print("✅ type_effectiveness 테이블 자동 생성 및 전체 상성 데이터 삽입 완료")
 
-
 # ------------------------------------------------
-# 7. ✅ 최종 리포트 생성 (OpenAI 클라이언트 및 API 키 관리 통합)
+# 7. ✅ 최종 리포트 생성 (세대/타입 필터 추가 버전)
 # ------------------------------------------------
-def generate_final_report(all_results: list) -> str:
+def generate_final_report(all_results: list, gen_filter=None, type_filter=None) -> str:
     """누적된 분석 결과들을 기반으로 최종 리포트를 HTML로 생성"""
     if not all_results:
         return "아직 분석된 결과가 없어서 최종 리포트를 만들 수 없네."
@@ -461,37 +511,82 @@ def generate_final_report(all_results: list) -> str:
 
     analyses_block = "\n\n---\n\n".join(sections)
 
-    # 2) LLM에게 HTML 형식의 리포트 작성 지시
-    system_prompt = """
-당신은 포켓몬 연구소의 오박사입니다.
-아래 여러 번의 질의/분석 결과를 토대로 하나의 '최종 연구 리포트'를 작성하세요.
+    # 2) 🔥 필터 설명 텍스트 만들기
+    filter_desc = []
+    if gen_filter is not None:
+        filter_desc.append(f"- 세대: {gen_filter}세대 중심으로 해석")
+    if type_filter:
+        filter_desc.append(f"- 타입: {', '.join(type_filter)} 타입 위주로 인사이트 정리")
 
-⚠️ 출력 형식은 반드시 유효한 HTML이어야 합니다.
+    filter_block = "\n".join(filter_desc) if filter_desc else "별도의 필터는 적용하지 않는다."
+
+    # 3) 🧓 오박사 말투 + HTML 리포트 프롬프트
+    system_prompt = f"""
+당신은 포켓몬 연구소의 책임 연구원인 **오박사**입니다.
+
+말투는 항상 오박사처럼 **친절하고 유쾌하며 약간 할아버지 느낌**으로 유지합니다.
+예) "~하네", "~이지", "~일세", "호오?", "흥미로운 결과라네!", "자네도 한번 확인해보겠나?"
+
+아래 여러 번의 질의/분석 결과를 토대로,
+**오박사가 직접 작성한 느낌의 '최종 연구 리포트'** 를 만들어 주세요.
+
+[분석 필터 조건]
+{filter_block}
+
+▶ 리포트에서는 위 필터 조건에 맞는 세대/타입을 중심으로,
+  중요 인사이트를 강조해서 정리하세요.
+▶ 단, 원본 데이터 전체를 참고하되,
+  예시·비교·강조 포인트에서 필터에 맞는 포켓몬/세대/타입을 우선적으로 언급하세요.
+
+⚠ 출력 형식은 반드시 유효한 HTML이어야 합니다.
 - <html>, <body> 태그는 쓰지 마세요. (조각만 반환)
 - 전체 구조는 아래와 같이 해주세요:
 
+<h2>🧓 오박사의 최종 연구 보고서</h2>
+<p>
+호오~ 자네가 지금까지 수행한 여러 분석 결과를 한데 모아 살펴보았네. <br>
+그럼 이제 내가 오박사가 최종 연구 내용을 정리해서 들려주도록 하지.
+</p>
+
 <h2>1. 요약</h2>
-<p>이번 분석의 전체적인 흐름을 3~5줄 정도로 정리합니다.</p>
+<p>이번 분석의 전체적인 흐름과 핵심 결과를 3~5줄 정도로 정리합니다.</p>
 
 <h2>2. 주요 발견</h2>
 <ul>
   <li>중요한 인사이트를 한 줄씩 정리합니다.</li>
   <li>중요 수치나 핵심 키워드는 <strong>태그</strong>로 감싸 강조합니다.</li>
+  <li>필터(세대/타입)가 있다면, 해당 조건을 중심으로 특징을 설명합니다.</li>
 </ul>
 
 <h2>3. 질문별 분석 정리</h2>
-<h3>질문 A 제목</h3>
-<p>해당 질문에 대한 분석 내용을 정리합니다.</p>
+<p>
+자네가 던졌던 각 질문을 오박사가 다시 되짚어보듯 정리해 주게. <br>
+예: "자네가 첫 번째로 던졌던 질문에서는 이런 흥미로운 점이 드러났네."
+</p>
 
-<h2>4. 결론 및 제안</h2>
+<h3>질문 A 제목 또는 요약</h3>
+<p>해당 질문에 대한 분석 내용을 오박사 말투로 설명합니다.</p>
+
+<h3>질문 B 제목 또는 요약</h3>
+<p>해당 질문에 대한 분석 내용을 오박사 말투로 설명합니다.</p>
+
+(필요한 만큼 질문별 섹션을 추가합니다.)
+
+<h2>4. 결론 및 오박사의 제안</h2>
 <ul>
   <li>플레이어/연구자에게 유용한 전략이나 행동 제안을 2~4개 정리합니다.</li>
+  <li>가능하면 근거가 된 수치나 패턴을 함께 언급합니다.</li>
+  <li>
+    마지막에는 오박사다운 따뜻한 마무리 멘트를 추가합니다. <br>
+    예: "앞으로도 함께 포켓몬 세계의 비밀을 하나씩 파헤쳐 보세, 자네!"
+  </li>
 </ul>
 
 요청 사항:
-- 중요한 수치, 인사이트, 결론은 <strong>...</strong>로 감싸 강조해 주세요.
-- 문장은 자연스럽고 친근한 한국어로 작성합니다.
+- 전체 문장은 자연스럽고 친근한 한국어로 작성합니다.
+- 전체 리포트는 처음부터 끝까지 **오박사 말투**를 유지합니다.
 - 너무 장황하지 않게, 또렷하게 정리된 보고서 느낌을 내 주세요.
+- 중요한 부분은 <strong>...</strong>로 강조해 주세요.
 """
 
     user_prompt = f"[질문 및 분석 결과]\n\n{analyses_block}"
@@ -512,6 +607,8 @@ def generate_final_report(all_results: list) -> str:
     except Exception as e:
         return f"❌ 최종 리포트 생성 실패: {e}"
 
+
+
 # ------------------------------------------------
 # 8. 최초 실행 시 타입 상성 자동 생성
 # ------------------------------------------------
@@ -520,3 +617,38 @@ if __name__ == "__main__":
     print("\n--- 환경 정보 ---")
     print("🔍 DB 경로:", DB_PATH)
     print("📂 DB 파일 존재 여부:", os.path.exists(DB_PATH))
+
+
+
+def add_pokemon_to_user(user_id: int, pokemon_name: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.cursor()
+        # 다음 슬롯 번호 계산
+        cur.execute(
+            "SELECT COALESCE(MAX(slot_no) + 1, 1) FROM UserPokemon WHERE user_id = ?",
+            (user_id,)
+        )
+        next_slot = cur.fetchone()[0]
+
+        # 포켓몬 기본 정보 가져오기
+        cur.execute(
+            "SELECT dexnum, name FROM pokemon WHERE name = ?",
+            (pokemon_name,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, f"{pokemon_name} 이(가) pokemon 테이블에 없네."
+
+        dexnum, name = row
+
+        # 실제 INSERT
+        cur.execute(
+            """
+            INSERT INTO UserPokemon (user_id, pokemon_id, pokemon_name, slot_no)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, dexnum, name, next_slot)
+        )
+        conn.commit()
+    return True, f"{pokemon_name} 를(을) 새로운 포켓몬으로 등록했네!"
+
