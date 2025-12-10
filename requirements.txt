@@ -1,0 +1,9 @@
+# requirements.txt
+streamlit
+openai
+pandas
+matplotlib
+requests
+tabulate
+Pillow
+rembg
