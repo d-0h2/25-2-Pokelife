@@ -427,7 +427,7 @@ def execute_query_and_format_response(question: str) -> str:
     if wants_chart and not df.empty:
         x_col, y_col = pick_chart_columns(df)
         if x_col and y_col:
-            title = f"{x_col}별 {y_col} 비교"
+            title = f" "
             img_tag = create_chart_base64(
                 df.head(10),
                 x_col=x_col,
